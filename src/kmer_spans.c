@@ -357,3 +357,14 @@ SEXP kmer_low_comp_regions(SEXP seq_r, SEXP k_r, SEXP min_width_r, SEXP min_scor
   UNPROTECT(1);
   return(ret_value);
 }
+
+static const R_CallMethodDef callMethods[] = {
+  {"kmer_counts", (DL_FUNC)&kmer_counts, 2},
+  {"kmer_low_comp_regions", (DL_FUNC)&kmer_low_comp_regions, 5},
+  {NULL, NULL, 0}
+};
+
+void R_init_kmer_spans(DllInfo *info)
+{
+  R_registerRoutines(info, NULL, callMethods, NULL, NULL);
+}
