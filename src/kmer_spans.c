@@ -33,6 +33,9 @@
 #define MAX_K 16
 #define REG_N 100
 
+// Used to translate offsets to sequences.
+const char NUC[4] = {'A', 'C', 'T', 'G'};
+
 // Holds information about n regions
 // with space for up to capacity regions
 // Note that int are stored as a single block
@@ -102,7 +105,7 @@ int* init_counts(int k){
 }
 
 // sets at_end to 1 if at end
-size_t skip_n(const unsigned char *seq, size_t i){
+size_t skip_n(const char *seq, size_t i){
   while(seq[i] && LC(seq[i]) == 'n')
     ++i;
   return(i);
@@ -110,7 +113,7 @@ size_t skip_n(const unsigned char *seq, size_t i){
 
 // returns the value of j; if it runs out of sequence (i.e. last k-mer)
 // or it finds an N. The caller must check the return value.
-size_t init_kmer(const unsigned char *seq, size_t i, unsigned long *offset, int k){
+size_t init_kmer(const char *seq, size_t i, unsigned long *offset, int k){
   size_t j = 0;
   while(seq[i]){
     *offset = 0;
@@ -126,7 +129,7 @@ size_t init_kmer(const unsigned char *seq, size_t i, unsigned long *offset, int 
 }
 
 // returns the number of words counted.
-size_t sequence_kmer_count(const unsigned char *seq, int *counts, int k){
+size_t sequence_kmer_count(const char *seq, int *counts, int k){
   size_t i = 0;
   unsigned long offset = 0;
   unsigned long word_count = 0;
@@ -144,6 +147,22 @@ size_t sequence_kmer_count(const unsigned char *seq, int *counts, int k){
     }
   }
   return(word_count);
+}
+
+// sets the seq to the sequence represented by the given
+// offset. Assumes that *seq is a char array of size
+// k + 1. The function will set seq[k] to 0, though it
+// would be more efficient to do so elsewhere.
+int kmer_seq(unsigned char *seq, unsigned int k, size_t offset){
+  if(k > MAX_K)
+    return(-1);
+  size_t mask = 3;
+  seq[k] = 0;
+  for(ssize_t off=k-1; off >= 0; off--){
+    seq[ off ] = NUC[ (offset & mask) ];
+    offset >>= 2;
+  }
+  return(0);
 }
 
 // a helper function for qsort. This allows the sorting of indices
@@ -182,12 +201,12 @@ void rank_kmers_w(int *counts, size_t k, double *ranks, double total_kmer_count)
 // in order to define the structure of the program.
 // here we will use ranks; these should be supplied by the caller
 // as they are common to the complete analysis.
-void low_complexity_regions(const unsigned char *seq, int seq_id, size_t start, size_t min_width,
+void low_complexity_regions(const char *seq, int seq_id, size_t start, size_t min_width,
 			    double min_score, double *kmer_ranks, int k, double threshold,
 			    struct seq_regions *reg){
   // first define the median of the kmer_spectrum;
-  size_t ks = (1 << (2*k));
-  // kmer_ranks will be returne
+  //   size_t ks = (1 << (2*k)); (not used)
+  // kmer_ranks will be returned
   //  size_t *kmer_ranks = rank_counts(kmer_spectrum, k);
   // double med_rank = 0.5; // (double)(ks / 2) - (ks % 2 == 0 ? 0.5 : 0);
   // and then start calculating offsets.
@@ -253,7 +272,7 @@ SEXP kmer_counts(SEXP seq_r, SEXP k_r){
   if(TYPEOF( k_r ) != INTSXP || length(k_r) < 1 )
     error("k_r must be an integer vector of length at least one");
   int seq_n = length(seq_r);
-  int k_n = length(k_r);
+  //  int k_n = length(k_r);
   int k = INTEGER( k_r )[0];
   if(k < 1 || k > MAX_K)
     error("k must be a positive integer less than 1+MAX_K");
@@ -297,7 +316,7 @@ SEXP kmer_low_comp_regions(SEXP seq_r, SEXP k_r, SEXP min_width_r, SEXP min_scor
 
   
   int seq_n = length(seq_r);
-  int k_n = length(k_r);
+  //  int k_n = length(k_r);
   int k = INTEGER( k_r )[0];
   int min_width = INTEGER(min_width_r)[0];
   double min_score = REAL(min_score_r)[0];
@@ -358,9 +377,28 @@ SEXP kmer_low_comp_regions(SEXP seq_r, SEXP k_r, SEXP min_width_r, SEXP min_scor
   return(ret_value);
 }
 
+SEXP kmer_seq_r(SEXP k_r){
+  if(TYPEOF(k_r) != INTSXP || length(k_r) != 1)
+    error("k_r should be an integer of length 1");
+  unsigned int k = (unsigned int)(INTEGER(k_r)[0]);
+  if(k > MAX_K || k < 1)
+    error("k_r (%d) should be smaller than MAX_K (%d) and larger than 0", k, MAX_K);
+  size_t n = 1 << (2 * k);
+  SEXP ret_value = PROTECT(allocVector(STRSXP, n));
+  unsigned char *buffer = malloc(sizeof(unsigned char) * (k+1));
+  for(size_t i=0; i < n; ++i){
+    kmer_seq(buffer, k, i);
+    SET_STRING_ELT(ret_value, i, mkChar((const char*)buffer));
+  }
+  free(buffer);
+  UNPROTECT(1);
+  return(ret_value);
+}
+
 static const R_CallMethodDef callMethods[] = {
   {"kmer_counts", (DL_FUNC)&kmer_counts, 2},
   {"kmer_low_comp_regions", (DL_FUNC)&kmer_low_comp_regions, 5},
+  {"kmer_seq_r", (DL_FUNC)&kmer_seq_r, 1},
   {NULL, NULL, 0}
 };
 

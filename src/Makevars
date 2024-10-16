@@ -1,3 +1,5 @@
 ## I don't think that this is actually needed as the default
 ## seems to be gnu99 in any case.
-CFLAGS=-std=gnu99
+## and in any case, R CMD SHLIB seems to ignore these variables.
+## CFLAGS=-std=gnu99
+CFLAGS=-Wall

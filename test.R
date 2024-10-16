@@ -1,4 +1,5 @@
 require("Biostrings")
+dyn.load("src/kmer_spans.so")
 
 seq <- paste(rep("ATAGACTAATACCTATACTAGACGTACTAGACCGAT", 10), collapse="")
 seq.2 <- paste( sample(c("A", "C", "T", "G"), 5e7, replace=TRUE), collapse="" )
@@ -9,7 +10,11 @@ kmer.count <- function(seq, k){
     c(tmp, k=k)
 }
 
-dyn.load("src/kmer_spans.so")
+kmer.seq <- function(k){
+    .Call("kmer_seq", as.integer(k))
+}
+
+kmers <- kmer.seq(2)
 
 system.time(
     tmp <- kmer.count(seq.2, 8)
