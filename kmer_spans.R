@@ -38,7 +38,7 @@ kmer.counts <- function(seq, k){
 ## if thr is set to 0.5, then any k-mer more common than the
 ## median will increase the score; this is probably too lenient
 ## and the default thr value is set to 0.75 here.
-kmer.low.comp.regions(seq, k, min.w, min.score, thr=0.75){
+kmer.low.comp.regions <- function(seq, k, min.w, min.score, thr=0.75){
     tmp <- .Call("kmer_low_comp_regions", seq, as.integer(k),
                  as.integer(min.w), as.double(min.score), thr)
     names(tmp) <- c("n", "counts", "w.rank", "pos", "score")
