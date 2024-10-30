@@ -2,7 +2,7 @@ require("Biostrings")
 dyn.load("src/kmer_spans.so")
 
 seq <- paste(rep("ATAGACTAATACCTATACTAGACGTACTAGACCGAT", 10), collapse="")
-seq.2 <- paste( sample(c("A", "C", "T", "G"), 5e7, replace=TRUE), collapse="" )
+seq.2 <- paste( sample(c("A", "C", "T", "G"), 5e7, replace=TRUE, prob=c(0.3, 0.2, 0.3, 0.2)), collapse="" )
 
 kmer.count <- function(seq, k){
     tmp <- .Call("kmer_counts", seq, as.integer(k))
@@ -11,10 +11,18 @@ kmer.count <- function(seq, k){
 }
 
 kmer.seq <- function(k){
-    .Call("kmer_seq", as.integer(k))
+    .Call("kmer_seq_r", as.integer(k))
 }
 
+
 kmers <- kmer.seq(2)
+
+system.time(
+    tmp <- kmer.count(seq.2, 2)
+)
+names(tmp$counts)  <- kmers
+
+cbind(kmers, tmp$counts)
 
 system.time(
     tmp <- kmer.count(seq.2, 8)
@@ -70,16 +78,34 @@ lc.regions <- function(seq, k, min.w, min.score, thr=0.5){
     tmp
 }
 
-dyn.load("src/kmer_spans.so")
-
 regs <- lc.regions( seq, 2, 20, 10, 0.5 )
 regs.3 <- lc.regions( seq, 3, 20, 10 )
 regs.4 <- lc.regions( seq, 4, 20, 10 )
 regs.5 <- lc.regions( seq, 5, 20, 10 )
 
 ## and lets try with a proper genome:
-lp.seq <- readDNAStringSet( "~/genomes/lophius/hifi_asm/yahs.out_scaffolds_final.fa" )
+## lp.seq <- readDNAStringSet( "~/genomes/lophius/hifi_asm/yahs.out_scaffolds_final.fa" )
 ## these are ordered by length. The longest is 48 Mbp.
+
+test.seq <- readDNAStringSet( "~/tine/Teleostei_assemblies/teleostei_prot_seq_ncbi/ncbi_dataset/data/GCF_902827115.1/cds_from_genomic.fna" )
+
+sum(nchar(test.seq)) ## 76062661
+test.cnt1 <- kmer.count( as.character(test.seq), 2 )
+names(test.cnt1$counts) <- kmer.seq(2)
+test.cnt2 <- oligonucleotideFrequency( test.seq, width=2 )
+
+test.cnt2.s <- colSums(test.cnt2)
+
+o <- order(kmer.seq(2))
+plot( test.cnt1$counts[o], test.cnt2.s )
+
+comp <- sapply( strsplit(names(test.cnt2.s), ""), function(x){
+    cmp <- c(A="T", C="G", T="A", G="C")
+    paste( cmp[ x ], collapse="" )
+})
+names(comp) <- names(test.cnt2.s)
+
+plot(test.cnt1$counts, test.cnt1$counts[ comp[names(test.cnt1$counts)] ])
 
 dyn.load("src/kmer_spans.so")
 lp.regs.1 <- lc.regions( as.character(lp.seq[1:2]), 6, 100, 20, thr=0.5 )
