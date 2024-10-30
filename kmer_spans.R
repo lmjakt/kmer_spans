@@ -69,7 +69,7 @@ kmer.seq <- function(k){
 ##
 ## the actual values of k can be derived as: log2(length) / 2.
 ## returns a list of in and output files and information about the sequence
-count.kmers <- function(seq.f, out.prefix, k, min.l=1e5, magic=kmer.magic()){
+kmers.to.file <- function(seq.f, out.prefix, k, min.l=1e5, magic=kmer.magic()){
     out.f <- paste0(out.prefix, "counts_", paste(k, collapse="_"), ".bin")
     seq.size <- 0
     seq.fsize <- 0
