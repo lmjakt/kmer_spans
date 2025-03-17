@@ -24,6 +24,31 @@ kmer.counts <- function(seq, k){
     tmp
 }
 
+## identifies regions based upon arbitrary kmer scores. For example,
+## this could be used to identify CpG islands by defining
+## kmer.scores[CG] to be some positive integer and all other kmer-
+## scores to be -1. K-mers can be weighted arbitrarily and then
+## used to define regions.
+## kmer.scores should be a named vector and it should be of
+## length 4^k
+## regions are identified using a recursively defined score:
+## s[i] = max(s[i-1] + kmer_w, 0)
+## where kmer_w is the weight (or score) of the current kmer.
+## regions are defined from the first non-0 score to the
+## maximum score as in the Smith-Waterman algorithm.
+kmer.regions <- function(seq, k, kmer.scores, min.width, min.score){
+    if(length(kmer.scores) != 4^k)
+        stop("There should be a total of 4^k scores");
+    k.seq <- kmer.seq(k)
+    if(any(! (k.seq %in% names(kmer.scores))))
+        stop("all kmers not defined")
+    kmer.scores <- kmer.scores[ k.seq ]
+    tmp <- .Call("kmer_regions_r", seq, as.integer(k), as.double(kmer.scores),
+                 as.integer(min.width), as.double(min.score))
+    names(tmp) <- c("n", "counts", "pos", "score")
+    tmp
+}
+
 ## identifies repeated spans in sequences.
 ## The function first calculates the k-mer spectrum of the
 ## sequences provided;
@@ -71,6 +96,21 @@ lr.regions <- function(seq, params, kmers, kmer.scores, trans.scores){
     tmp2
 }
 
+## count the number of occurences of defined words of length k in sliding
+## windows. Returns the distributions of those counts across the sequences
+## provided.
+window.kmer.dist <- function(seq, kmers, window){
+    if(length(table(nchar(kmers))) != 1)
+        stop("All kmers must be of the same size")
+    dists <- .Call("windowed_kmer_count_distributions_r", seq, kmers,
+                   nchar(kmers[1]), as.integer(window))
+    colnames(dists) <- kmers
+    dists
+}
+
+## DEPENDANCY WARNING: This function currently uses Biostrings to read in sequences
+## it will be rewritten in the future to remove this dependency and to allow for
+## more efficient throughput.
 ## this will simply read in a load of sequence files and then output counts to a file
 ## specified by the prefix.
 ## The files will be binary encoded as 32 bit integers.

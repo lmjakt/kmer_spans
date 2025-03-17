@@ -21,7 +21,10 @@
   
   and to update the counts:
   
-  counts[offset]++
+  counts[offset & mask]++
+
+  Where the mask is simply (2^k)-1; i.e. the 2*k lower bits are 1 and all
+  others are 0.
 
   Note that we will check for Ns in the sequence and not determine an
   offset for any words that contains an N;
@@ -30,6 +33,7 @@
 // a macro to update an offset as defined here
 #define UPDATE_OFFSET(off, c) ( ((off) << 2) | (( (c) >> 1) & 3) )
 #define LC(c) ( (c) | 0x20 )
+#define UC(c) ( (c) & 0xCF )
 #define MAX_K 16
 #define REG_N 100
 
@@ -104,7 +108,6 @@ int* init_counts(int k){
   return( calloc( sizeof(int), 1 << (2*k) ));
 }
 
-// sets at_end to 1 if at end
 size_t skip_n(const char *seq, size_t i){
   while(seq[i] && LC(seq[i]) == 'n')
     ++i;
@@ -196,14 +199,48 @@ void rank_kmers_w(int *counts, size_t k, double *ranks, double total_kmer_count)
   free(indices);
 }
 
+// This function was previously called:
+// low_complexity_regions
+// as I initially wrote it with the idea of identifying regions that
+// are enriched for k-mers that are over-represented in the genome.
+// However, it is better thought of as an arbitrary k-mer based region
+// identififer; for example we can easily use it to identify CpG
+// regions by setting the k-mer weigths appropriately.
+// Regions are defined by the recursive function:
+//
+// s[i] = s[i-1] + (w[j] - threshold)
+// where s represents a weight for the current k-mer and the threshold is
+// a constant included so as to allow simply based on k-mer ranks obtained
+// using rank_kmers_w. 
+// 
 // it would be better if we specify a scoring function here; however,
 // we will define that at a later point. For now we try something out
 // in order to define the structure of the program.
 // here we will use ranks; these should be supplied by the caller
 // as they are common to the complete analysis.
-void low_complexity_regions(const char *seq, int seq_id, size_t start, size_t min_width,
-			    double min_score, double *kmer_ranks, int k, double threshold,
-			    struct seq_regions *reg){
+// This function should be renamed as it can be used to identify any type of
+// region based on kmers, by adjusting the kmer_ranks to a general scoring
+// system. Hence I can easily use this to define CpG islands or CHH, or any
+// type of region that I like.
+// seq: a sequence
+// seq_id: a sequence identifier
+// start: where to start the scan
+// min_width: the minimum width of a region
+// min_score: the minimum score of a region
+// kmer_ranks: a weigth vector, should be renamed as it can be arbitrary
+// k: the length of words
+// threshold: the minimum score / weigth / rank that is considered positive
+// reg: a pointer to a seq_reqions struct that will store the regions
+// kmer_counts: a pointer to an array of intss; if not NULL, this should
+//              point to a an array of size 1 << (k*2); the function will
+//              increment these as it encounters k-mers.
+//              This should probably be a 64 bit integer as with large
+//              genomes there is a possibility that it will overflow. But
+//              R does not have long integers, and so I will stick with
+//              a 32 bit integer.
+void kmer_regions(const char *seq, int seq_id, size_t start, size_t min_width,
+		  double min_score, double *kmer_ranks, int k, double threshold,
+		  struct seq_regions *reg, int *kmer_counts){
   // first define the median of the kmer_spectrum;
   //   size_t ks = (1 << (2*k)); (not used)
   // kmer_ranks will be returned
@@ -224,6 +261,8 @@ void low_complexity_regions(const char *seq, int seq_id, size_t start, size_t mi
     i = init_kmer(seq, i, &offset, k);
     last_score = max_score = score = 0;
     while(seq[i] && LC(seq[i]) != 'n'){
+      if(kmer_counts)
+	kmer_counts[mask & offset]++;
       double s = (kmer_ranks[ mask & offset ] - threshold); // / threshold;
       score = last_score + s;
       score = score > 0 ? score : 0;
@@ -264,6 +303,7 @@ void low_complexity_regions(const char *seq, int seq_id, size_t start, size_t mi
     }
   }
 }
+
 
 // seq: a sequence to be scanned
 // seq_id: an integer identifying the sequence
@@ -352,6 +392,55 @@ void find_kmer_tr_lr_regions(const char *seq, int seq_id,
   }
 }
 
+
+// seq: a sequence of ACTG, possibly with N-s in it.
+// kmers: a set of kmer offsets for kmers of length k
+//        the number of k-mers is kmer_n
+// kmer_counts: an array of counts allocated elsewhere.
+//              this will hold the counts for a region
+//              it should be of length (1 << (2 * k))
+// **window_kmer_counts: These hold the distributions of number
+//                       of occurences of the specified kmer within
+//                       windows of size window.
+//                       Each should have a size of window + 1;
+// k : the size of the kmers analysed
+// window: the size of the window
+void windowed_kmer_count_distributions(const char *seq, unsigned long *kmers, int kmer_n,
+				       int **window_kmer_counts, unsigned int *kmer_counts,
+				       unsigned int k, int window){
+  unsigned int k_counts_size = (1 << (2 * k));
+  memset( kmer_counts, 0, sizeof(int) * k_counts_size );
+  // left and right are the window begin and end positions.
+  size_t left = 0;
+  size_t right = 0;
+  // the offset is the current word;
+  unsigned long right_offset = 0;
+  unsigned long left_offset = 0;
+  unsigned long mask = (1 << (2*k)) - 1;
+  while( seq[right] ){
+    right = init_kmer(seq, right, &right_offset, k);
+    if(!seq[right])
+      break;
+    left = right;
+    left_offset = right_offset;
+    kmer_counts[ right_offset & mask ]++;
+    while(seq[right] && LC(seq[right]) != 'n'){
+      right_offset = UPDATE_OFFSET( right_offset, seq[right] );
+      kmer_counts[ right_offset & mask ]++;
+      ++right;
+      if(window > right)
+	continue;
+      // Update the number of counts for window_kmer_counts;
+      for(int i=0; i < kmer_n; ++i)
+	window_kmer_counts[i][ kmer_counts[ kmers[i] ] ]++;
+      kmer_counts[ left_offset & mask ]--;
+      left_offset = UPDATE_OFFSET( left_offset, seq[left] );
+      ++left;
+    }
+  }
+}
+
+
 // Return frequency spectrum to an R-session
 SEXP kmer_counts(SEXP seq_r, SEXP k_r){
   if(TYPEOF( seq_r ) != STRSXP || length(seq_r) < 1 )
@@ -385,6 +474,65 @@ SEXP kmer_counts(SEXP seq_r, SEXP k_r){
 				     k);
       n_counts[0] = n_counts[0] + (double)n;
   }
+  UNPROTECT(1);
+  return(ret_value);
+}
+
+
+SEXP kmer_regions_r(SEXP seq_r, SEXP k_r, SEXP kmer_w_r, SEXP min_width_r, SEXP min_score_r){
+  if(TYPEOF( seq_r ) != STRSXP || length(seq_r) < 1 )
+    error("seq_r must be a character vector of length at least one");
+  if(TYPEOF( k_r ) != INTSXP || length(k_r) < 1 )
+    error("k_r must be an integer vector of length at least one");
+  if(TYPEOF( kmer_w_r ) != REALSXP )
+    error("kmer_w_r must be a double vector of length k^4");
+  if(TYPEOF( min_width_r ) != INTSXP || length(min_width_r) != 1 )
+    error("the minimum width must be an integer vector of length 1");
+  if(TYPEOF( min_score_r ) != REALSXP || length(min_score_r) != 1 )
+    error("the minimum score must be a REAL vector of length 1");
+  
+  int seq_n = length(seq_r);
+  int k = INTEGER( k_r )[0];
+  if( k >= MAX_K )
+    error("kmer sizes larger than or equal to %d not currently supported", MAX_K);
+  int kmer_n = length(kmer_w_r);
+  double *kmer_w = REAL(kmer_w_r);
+  if((unsigned int)kmer_n != (1 << (2*k)))
+    error("kmer_w contains %d elements but should have %d", kmer_n, (1 << (2*k)));
+  int min_width = INTEGER(min_width_r)[0];
+  double min_score = REAL(min_score_r)[0];
+
+  SEXP ret_value = PROTECT(allocVector(VECSXP, 4));
+  // the elements of ret value are:
+  // 1. a double giving the total length of sequence (including N-regions)
+  // 2. a vector giving the total kmer counts for all sequences
+  // 3. region integers
+  // 4. region doubles
+  // the k-mer ranks and the region integers and region doubles
+  SET_VECTOR_ELT( ret_value, 0, allocVector(REALSXP, 1));
+  double *nuc_counts = REAL(VECTOR_ELT(ret_value, 0));
+  *nuc_counts = 0;
+  SET_VECTOR_ELT( ret_value, 1, allocVector(INTSXP, kmer_n));
+  int *k_counts = INTEGER(VECTOR_ELT(ret_value, 1));
+  memset(k_counts, 0, sizeof(int) * kmer_n);
+  // note that we will have overflows if more than 2^31 (i.e. k=15)
+
+  // REG_N should probably be an option.
+  struct seq_regions regions = init_regions(REG_N);
+  for(int i=0; i < seq_n; ++i){
+    SEXP seq = STRING_ELT(seq_r, i);
+    int seq_l = length(seq);
+    if(seq_l < k)
+      continue;
+    (*nuc_counts) += seq_l;
+    kmer_regions(CHAR(seq), i, 0, min_width, min_score,
+		 kmer_w, k, 0, &regions, k_counts);
+  }
+  SET_VECTOR_ELT(ret_value, 2, allocMatrix(INTSXP, regions.ints_nrow, regions.n));
+  SET_VECTOR_ELT(ret_value, 3, allocMatrix(REALSXP, regions.doubles_nrow, regions.n));
+  memcpy( INTEGER(VECTOR_ELT(ret_value, 2)), regions.int_data, sizeof(int) * regions.ints_nrow * regions.n);
+  memcpy( REAL(VECTOR_ELT(ret_value, 3)), regions.double_data, sizeof(double) * regions.doubles_nrow * regions.n);
+  seq_regions_free(&regions);
   UNPROTECT(1);
   return(ret_value);
 }
@@ -451,8 +599,8 @@ SEXP kmer_low_comp_regions(SEXP seq_r, SEXP k_r, SEXP min_width_r, SEXP min_scor
     int seq_l = length(seq);
     if(seq_l < k)
       continue;
-    low_complexity_regions(CHAR(seq), i, 0, min_width, min_score,
-			   kmer_ranks, k, threshold, &regions);
+    kmer_regions(CHAR(seq), i, 0, min_width, min_score,
+		 kmer_ranks, k, threshold, &regions, NULL);
   }
   n_counts[1] = 0;
   SET_VECTOR_ELT(ret_value, 3, allocMatrix(INTSXP, regions.ints_nrow, regions.n));
@@ -556,11 +704,69 @@ SEXP tr_lr_regions_r(SEXP seq_r, SEXP params_r,
   return(ret_value);
 }
 
+SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEXP window_r){
+  if( TYPEOF( seq_r ) != STRSXP || length( seq_r ) < 1 )
+    error("seq_r should be a character vector with at least one element");
+  if( TYPEOF( kmers_r ) != STRSXP || length( kmers_r ) < 1 )
+    error("kmers_r should be a character vector with at least one element");
+  if( TYPEOF( k_r ) != INTSXP || length( k_r ) != 1 )
+    error("k_r should be an integer vector with one element");
+  if( TYPEOF( window_r ) != INTSXP || length( window_r ) != 1)
+    error("window_r should be an integer vector with one element");
+  unsigned int k = (unsigned int)asInteger(k_r);
+  if(k >= MAX_K)
+    error("kmer sizes larger than or equal to %d not currently supported", MAX_K);
+  // check that all kmers are the correct size. If not stop.
+  for(int i=0; i < length(kmers_r); ++i){
+    if(length(STRING_ELT(kmers_r, i)) != k)
+      error("All kmers specified must be of the same length");
+  }
+  int window = asInteger(window_r);
+  if(window < 2 * k)
+    error("The window size must be at least two times k");
+  
+  // we can then set up the data that we need.
+  int kmer_n = length(kmers_r);
+  size_t k_counts_size = 1 << (2 * k);
+  // kmer_counts will hold the kmer spectrum.
+  int *kmer_counts = malloc( sizeof(int) * k_counts_size );
+  unsigned long *kmer_offsets = calloc( kmer_n, sizeof(size_t) );
+  for(int i=0; i < kmer_n; ++i)
+    init_kmer(CHAR(STRING_ELT(kmers_r, i)), 0, kmer_offsets + i, k);
+
+  // The return data. This will simply be the distributions of the
+  // the number of windows containing different numbers of the kmers
+  // specified.
+  // We might consider to return a bit more information; like the total number
+  // of sequences considered, and total length. But for now keep it simple;
+  SEXP ret_value = PROTECT(allocMatrix(INTSXP, window + 1, kmer_n));
+  int **window_kmer_counts = malloc(sizeof(int*) * kmer_n);
+  memset(INTEGER(ret_value), 0, sizeof(int) * (window + 1) * kmer_n);
+  for(int i=0; i < kmer_n; ++i)
+    window_kmer_counts[i] = INTEGER(ret_value) + i * (window + 1);
+  
+  // And go through the sequences and increment counts.
+  for(int i=0; i < length(seq_r); ++i){
+    SEXP seq = STRING_ELT(seq_r, i);
+    if(length(seq) <= window)
+      continue;
+    windowed_kmer_count_distributions(CHAR(seq), kmer_offsets, kmer_n, window_kmer_counts, kmer_counts,
+				      k, window);
+  }
+  free(kmer_counts);
+  free(kmer_offsets);
+  free(window_kmer_counts);
+  UNPROTECT(1);
+  return(ret_value);
+}
+
 static const R_CallMethodDef callMethods[] = {
   {"kmer_counts", (DL_FUNC)&kmer_counts, 2},
+  {"kmer_regions_r", (DL_FUNC)&kmer_regions_r, 5},
   {"kmer_low_comp_regions", (DL_FUNC)&kmer_low_comp_regions, 5},
   {"kmer_seq_r", (DL_FUNC)&kmer_seq_r, 1},
   {"tr_lr_regions_r", (DL_FUNC)&tr_lr_regions_r, 5},
+  {"windowed_kmer_count_distributions_r", (DL_FUNC)&windowed_kmer_count_distributions_r, 4},
   {NULL, NULL, 0}
 };
 

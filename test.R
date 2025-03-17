@@ -4,6 +4,22 @@ dyn.load("src/kmer_spans.so")
 seq <- paste(rep("ATAGACTAATACCTATACTAGACGTACTAGACCGAT", 10), collapse="")
 seq.2 <- paste( sample(c("A", "C", "T", "G"), 5e7, replace=TRUE, prob=c(0.3, 0.2, 0.3, 0.2)), collapse="" )
 
+## test windows
+seq <- vector(mode='character')
+seq[1] <- paste( sample(c("A", "C", "T", "G"), 100, replace=TRUE), collapse="" )
+seq[2] <- paste( sample(c("A", "C", "T", "G"), 100, replace=TRUE), collapse="" )
+seq[3] <- paste(paste( rep("AG", 50), collapse = ""), seq[1], seq[2], seq[1], sep="")
+
+
+dyn.load("src/kmer_spans.so")
+
+source("kmer_spans.R")
+tmp <- window.kmer.dist(substring(seq[3], 1, 120), c("AG", "GA", "AT"), 20)
+
+
+tmp <- window.kmer.dist( seq[3], c("A", "C", "T", "G"), 20)
+
+
 kmer.count <- function(seq, k){
     tmp <- .Call("kmer_counts", seq, as.integer(k))
     names(tmp) <- c("n", "counts")
@@ -67,6 +83,8 @@ seq <- vector(mode='character')
 seq[1] <- paste( sample(c("A", "C", "T", "G"), 100, replace=TRUE), collapse="" )
 seq[2] <- paste( sample(c("A", "C", "T", "G"), 100, replace=TRUE), collapse="" )
 seq[3] <- paste(paste( rep("AG", 50), collapse = ""), seq[1], seq[2], seq[1], sep="")
+
+
 
 
 lc.regions <- function(seq, k, min.w, min.score, thr=0.5){
