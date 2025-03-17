@@ -2,7 +2,7 @@ dyn.load( paste(dirname(sys.frame(1)$ofile), "src/kmer_spans.so", sep="/") )
 
 ## this defines a magic number that identifies files containing
 ## kmer counts.
-kmer.magic <- function(){ 720531L }
+kmer.magic <- function(){ 310572L }
 
 ## this counts kmers for a single k;
 ## seq should be a character vector;
@@ -58,6 +58,19 @@ kmer.seq <- function(k){
     .Call("kmer_seq_r", as.integer(k))
 }
 
+lr.regions <- function(seq, params, kmers, kmer.scores, trans.scores){
+    tmp <- .Call("tr_lr_regions_r",
+                 seq, as.integer(params), kmers,
+                 as.double(kmer.scores), as.double(trans.scores))
+    names(tmp) <- c("kmer.scores", "pos", "scores")
+    rownames(tmp$kmer.scores) <- kmer.seq( as.integer(params[1]) )
+    rownames(tmp$pos) <- c("seq.i", "beg", "end")
+    rownames(tmp$score) <- c("score", "null")
+    tmp2 <- list(kmer.scores=tmp[[1]], reg=data.frame( t(tmp$pos), t(tmp$scores) ))
+    colnames(tmp2$reg)[4:5] <- c("score", "null")
+    tmp2
+}
+
 ## this will simply read in a load of sequence files and then output counts to a file
 ## specified by the prefix.
 ## The files will be binary encoded as 32 bit integers.
@@ -105,14 +118,19 @@ kmers.to.file <- function(seq.f, out.prefix, k, min.l=1e5, magic=kmer.magic()){
 read.kmers <- function(fname, magic=kmer.magic()){
     con <- file(fname, open="rb")
     m1 <- readBin( con, "integer", n=1 )
-    if(m1 != magic)
+    if(m1 != magic){
+        close(con)
         return(FALSE)
+    }
     kn <- readBin(con, "integer", n=1)
-    if(kn < 1)
+    if(kn < 1){
+        close(con)
         return(FALSE)
+    }
     ks <- readBin(con, "integer", n=kn)
     counts <- lapply(ks, function(n){
         readBin(con, "integer", n=n)
     })
+    close(con)
     list(k=as.integer(log2(ks) / 2), counts=counts)
 }
