@@ -15,12 +15,14 @@ kmer.magic <- function(){ 310572L }
 ##       due to the presence of non-[ACTG] characters
 ##       in the sequence.
 ## 2. counts: a vector of kmer-counts
-kmer.counts <- function(seq, k){
+kmer.counts <- function(seq, k, with.f=TRUE){
     k <- as.integer(k)
     tmp <- .Call("kmer_counts", seq, k);
     names(tmp) <- c("n", "counts")
     tmp$n <- c(k, tmp$n)
     names(tmp$n) <- c('k', 'n')
+    if(with.f)
+        tmp$f <- tmp$counts / sum(tmp$counts)
     tmp
 }
 
@@ -99,12 +101,20 @@ lr.regions <- function(seq, params, kmers, kmer.scores, trans.scores){
 ## count the number of occurences of defined words of length k in sliding
 ## windows. Returns the distributions of those counts across the sequences
 ## provided.
-window.kmer.dist <- function(seq, kmers, window){
+window.kmer.dist <- function(seq, kmers, window, freq=TRUE, ret.flag=0L){
     if(length(table(nchar(kmers))) != 1)
         stop("All kmers must be of the same size")
     dists <- .Call("windowed_kmer_count_distributions_r", seq, kmers,
-                   nchar(kmers[1]), as.integer(window))
-    colnames(dists) <- kmers
+                   nchar(kmers[1]), as.integer(window), as.integer(ret.flag))
+    names(dists) <- c("dist", "seq.i", "scores")
+    colnames(dists$dist) <- kmers
+    if(!is.null(dists$scores)){
+        for(i in 1:length(dists$scores)){
+            colnames(dists$scores[[i]]) <- kmers
+        }
+    }
+    if(freq)
+        dists$dist <- dists$dist / colSums(dists$dist)
     dists
 }
 

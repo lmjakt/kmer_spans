@@ -405,11 +405,13 @@ void find_kmer_tr_lr_regions(const char *seq, int seq_id,
 //                       Each should have a size of window + 1;
 // k : the size of the kmers analysed
 // window: the size of the window
+// **kmer_counts_pos: an array of integer arrays. If specified, then there
+//                    should be kmer_n arrays, each one the length of the
+//                    sequence; They should be set to 0 by the caller.
 void windowed_kmer_count_distributions(const char *seq, unsigned long *kmers, int kmer_n,
 				       int **window_kmer_counts, unsigned int *kmer_counts,
-				       unsigned int k, int window){
+				       unsigned int k, int window, int **kmer_counts_pos){
   unsigned int k_counts_size = (1 << (2 * k));
-  memset( kmer_counts, 0, sizeof(int) * k_counts_size );
   // left and right are the window begin and end positions.
   size_t left = 0;
   size_t right = 0;
@@ -418,6 +420,7 @@ void windowed_kmer_count_distributions(const char *seq, unsigned long *kmers, in
   unsigned long left_offset = 0;
   unsigned long mask = (1 << (2*k)) - 1;
   while( seq[right] ){
+    memset( kmer_counts, 0, sizeof(int) * k_counts_size );
     right = init_kmer(seq, right, &right_offset, k);
     if(!seq[right])
       break;
@@ -428,11 +431,14 @@ void windowed_kmer_count_distributions(const char *seq, unsigned long *kmers, in
       right_offset = UPDATE_OFFSET( right_offset, seq[right] );
       kmer_counts[ right_offset & mask ]++;
       ++right;
-      if(window > right)
+      if(window > (right - (left - k)))
 	continue;
       // Update the number of counts for window_kmer_counts;
-      for(int i=0; i < kmer_n; ++i)
+      for(int i=0; i < kmer_n; ++i){
 	window_kmer_counts[i][ kmer_counts[ kmers[i] ] ]++;
+	if(kmer_counts_pos)
+	  kmer_counts_pos[i][ left ] = kmer_counts[ kmers[i] ];
+      }
       kmer_counts[ left_offset & mask ]--;
       left_offset = UPDATE_OFFSET( left_offset, seq[left] );
       ++left;
@@ -704,7 +710,9 @@ SEXP tr_lr_regions_r(SEXP seq_r, SEXP params_r,
   return(ret_value);
 }
 
-SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEXP window_r){
+// ret_flag; specification of bitwise options. Currently only one option. If bit 1 is set,
+// return also the scores at all positions analysed.
+SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEXP window_r, SEXP ret_flag_r){
   if( TYPEOF( seq_r ) != STRSXP || length( seq_r ) < 1 )
     error("seq_r should be a character vector with at least one element");
   if( TYPEOF( kmers_r ) != STRSXP || length( kmers_r ) < 1 )
@@ -713,6 +721,8 @@ SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEX
     error("k_r should be an integer vector with one element");
   if( TYPEOF( window_r ) != INTSXP || length( window_r ) != 1)
     error("window_r should be an integer vector with one element");
+  if( TYPEOF( ret_flag_r ) != INTSXP || length(ret_flag_r) != 1)
+    error("ret_flag_r should a single integer");
   unsigned int k = (unsigned int)asInteger(k_r);
   if(k >= MAX_K)
     error("kmer sizes larger than or equal to %d not currently supported", MAX_K);
@@ -724,7 +734,7 @@ SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEX
   int window = asInteger(window_r);
   if(window < 2 * k)
     error("The window size must be at least two times k");
-  
+  unsigned int ret_flag = (unsigned int)asInteger(ret_flag_r);
   // we can then set up the data that we need.
   int kmer_n = length(kmers_r);
   size_t k_counts_size = 1 << (2 * k);
@@ -739,22 +749,42 @@ SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEX
   // specified.
   // We might consider to return a bit more information; like the total number
   // of sequences considered, and total length. But for now keep it simple;
-  SEXP ret_value = PROTECT(allocMatrix(INTSXP, window + 1, kmer_n));
+  SEXP ret_value = PROTECT(allocVector(VECSXP, 3));
+  SET_VECTOR_ELT(ret_value, 0, allocMatrix(INTSXP, window + 1, kmer_n));
   int **window_kmer_counts = malloc(sizeof(int*) * kmer_n);
-  memset(INTEGER(ret_value), 0, sizeof(int) * (window + 1) * kmer_n);
+  memset(INTEGER(VECTOR_ELT(ret_value, 0)), 0, sizeof(int) * (window + 1) * kmer_n);
   for(int i=0; i < kmer_n; ++i)
-    window_kmer_counts[i] = INTEGER(ret_value) + i * (window + 1);
+    window_kmer_counts[i] = INTEGER(VECTOR_ELT(ret_value, 0)) + i * (window + 1);
+
+  SET_VECTOR_ELT( ret_value, 1, allocVector(INTSXP, length(seq_r)));
+  int *seq_included = INTEGER(VECTOR_ELT(ret_value, 1));
+  int **kmer_counts_pos = 0;
+  if(ret_flag & 1){
+    kmer_counts_pos = malloc(sizeof(int*) * kmer_n);
+    SET_VECTOR_ELT(ret_value, 2, allocVector(VECSXP, length(seq_r)));
+  }
   
   // And go through the sequences and increment counts.
   for(int i=0; i < length(seq_r); ++i){
     SEXP seq = STRING_ELT(seq_r, i);
+    seq_included[i] = 0;
     if(length(seq) <= window)
       continue;
+    seq_included[i] = 1;
+    if(kmer_counts_pos){
+      SET_VECTOR_ELT( VECTOR_ELT(ret_value, 2), i, allocMatrix(INTSXP, length(seq), kmer_n) );
+      int *counts_pos = INTEGER(VECTOR_ELT( VECTOR_ELT(ret_value, 2), i ));
+      memset(counts_pos, 0, sizeof(int) * length(seq) * kmer_n );
+      for(int j=0; j < kmer_n; ++j){
+	kmer_counts_pos[j] = counts_pos + length(seq) * j;
+      }
+    }
     windowed_kmer_count_distributions(CHAR(seq), kmer_offsets, kmer_n, window_kmer_counts, kmer_counts,
-				      k, window);
+				      k, window, kmer_counts_pos);
   }
   free(kmer_counts);
   free(kmer_offsets);
+  free(kmer_counts_pos);
   free(window_kmer_counts);
   UNPROTECT(1);
   return(ret_value);
@@ -766,7 +796,7 @@ static const R_CallMethodDef callMethods[] = {
   {"kmer_low_comp_regions", (DL_FUNC)&kmer_low_comp_regions, 5},
   {"kmer_seq_r", (DL_FUNC)&kmer_seq_r, 1},
   {"tr_lr_regions_r", (DL_FUNC)&tr_lr_regions_r, 5},
-  {"windowed_kmer_count_distributions_r", (DL_FUNC)&windowed_kmer_count_distributions_r, 4},
+  {"windowed_kmer_count_distributions_r", (DL_FUNC)&windowed_kmer_count_distributions_r, 5},
   {NULL, NULL, 0}
 };
 

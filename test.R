@@ -1,5 +1,5 @@
 require("Biostrings")
-dyn.load("src/kmer_spans.so")
+source("kmer_spans.R")
 
 seq <- paste(rep("ATAGACTAATACCTATACTAGACGTACTAGACCGAT", 10), collapse="")
 seq.2 <- paste( sample(c("A", "C", "T", "G"), 5e7, replace=TRUE, prob=c(0.3, 0.2, 0.3, 0.2)), collapse="" )
@@ -13,7 +13,6 @@ seq[3] <- paste(paste( rep("AG", 50), collapse = ""), seq[1], seq[2], seq[1], se
 
 dyn.load("src/kmer_spans.so")
 
-source("kmer_spans.R")
 tmp <- window.kmer.dist(substring(seq[3], 1, 120), c("AG", "GA", "AT"), 20)
 
 
@@ -102,10 +101,210 @@ regs.4 <- lc.regions( seq, 4, 20, 10 )
 regs.5 <- lc.regions( seq, 5, 20, 10 )
 
 ## and lets try with a proper genome:
-## lp.seq <- readDNAStringSet( "~/genomes/lophius/hifi_asm/yahs.out_scaffolds_final.fa" )
+lp.seq <- readDNAStringSet( "~/genomes/lophius/hifi_asm/yahs.out_scaffolds_final.fa" )
 ## these are ordered by length. The longest is 48 Mbp.
 
-test.seq <- readDNAStringSet( "~/tine/Teleostei_assemblies/teleostei_prot_seq_ncbi/ncbi_dataset/data/GCF_902827115.1/cds_from_genomic.fna" )
+## lets get the distributions of the lengths:
+## for all dinucleotides
+dinucleotides <- kmer.seq(2)
+
+## mononucleotide frequencies
+lp.mnf <- kmer.counts( as.character(lp.seq[[1]]), 1 )
+
+dn.exp.m <- with(lp.mnf, f %*% t(f))
+colnames(dn.exp.m) <- kmer.seq(1)
+rownames(dn.exp.m) <- kmer.seq(1)
+dn.exp <- as.vector(dn.exp.m)
+names(dn.exp) <- paste0( rownames(dn.exp.m)[row(dn.exp.m)], colnames(dn.exp.m)[col(dn.exp.m)] )
+
+## scaffold 11 gives me strange values even within the first million base pairs.
+dn.wind.11 <- window.kmer.dist( as.character(lp.seq[[11]]), dinucleotides, 200, freq=FALSE, ret.flag=1L)
+
+rng <- 1:1e7
+with(dn.wind.11, plot(rng, scores[[1]][rng,'CG'], type='l'))
+## something weird after 7e5
+abline(v=6.85e5, col='red')
+
+with(dn.wind.11, plot(1:nrow(scores[[1]]), scores[[1]][,'CG'], type='l', xlim=c(6.8e5, 6.9e5)))
+abline(v=c(685700, 685700+500), col='red')
+rng <- c(685700, 685700+1000)
+with(dn.wind.11, plot(1:nrow(scores[[1]]), scores[[1]][,'CG'], type='l', xlim=c(6.8e5, 6.9e5)))
+
+rng <- (1e6+20):(1e6+400)
+with(dn.wind.11, plot(rng, scores[[1]][rng,'CG'], type='l'))
+
+as.character(substring( lp.seq[[11]], rng[1], rng[2]))
+
+with(dn.wind.11, scores[[1]][ 400 + rng[1]:rng[2], 'CG' ])
+
+as.character(substring( lp.seq[[11]], 400 + rng[1], 500 + rng[1] ))
+
+system.time(
+    lp.seq.union <- window.kmer.dist( as.character(lp.seq[[1]]), dinucleotides, 200, ret.flag=1 )
+)
+##  user  system elapsed 
+##  1.673   1.149   2.822 
+dim(lp.seq.union)
+## [1] 201  16
+
+system.time(
+    lp.seq.union <- window.kmer.dist( as.character(lp.seq[[1]]), dinucleotides, 200, ret.flag=0 )
+)
+##  user  system elapsed 
+## 1.193   0.064   1.256 
+
+## a random sequence. This is unfortunately slow; sampling 48e6 times and pasting.. 
+lp.rnd <- paste0( sample(kmer.seq(1), width(lp.seq)[1], replace=TRUE, prob=lp.mnf$f), collapse="" )
+lp.rnd.wc <- window.kmer.dist( lp.rnd, dinucleotides, 200 )
+
+tmp <- kmer.counts( lp.rnd, 1)
+tmp$f
+## [1] 0.3007744 0.1988468 0.3008254 0.1995534
+lp.mnf$f
+## [1] 0.3006933 0.1988830 0.3008665 0.1995572
+
+## this takes a bit of time. 
+lp.all.1 <- kmer.counts( as.character(lp.seq), 1 )
+lp.all.1$f
+## [1] 0.2998180 0.2004253 0.2993487 0.2004079
+## 
+lp.mnf$f
+## [1] 0.3006933 0.1988830 0.3008665 0.1995572
+
+kmer.counts( lp.rnd, 1 )$counts / lp.mnf$counts
+## [1] 1.0002718 0.9998203 0.9998656 0.9999826
+
+im.col <- hcl.colors(128, "YlOrRd", rev = TRUE)
+
+image(1:nrow(lp.seq.union$dist), 1:ncol(lp.seq.union$dist), log(lp.seq.union$dist), col=im.col, axes=FALSE)
+axis(1)
+axis(2, at=1:ncol(lp.seq.union), labels=colnames(lp.seq.union), las=2)
+
+
+## 
+wind.exp <- sapply(dn.exp, function(p){ dbinom( 1:nrow(lp.seq.union$dist)-1, as.integer(nrow(lp.seq.union$dist)), p )})
+
+par(mfrow=c(2,2))
+image(1:nrow(lp.seq.union$dist), 1:ncol(lp.seq.union$dist), (lp.seq.union$dist), col=im.col, axes=TRUE)
+image(1:nrow(lp.rnd.wc$dist), 1:ncol(lp.rnd.wc$dist), (lp.rnd.wc$dist), col=im.col, axes=TRUE)
+image(1:nrow(wind.exp), 1:ncol(wind.exp)-1, (wind.exp), col=im.col)
+
+dn.cols <- hsv( 1:ncol(lp.seq.union$dist) / (1.25 * ncol(lp.seq.union$dist)), 1, c(0.5, 0.8) )
+
+par(mfrow=c(2,2))
+plot(1:nrow(lp.seq.union$dist)-1, lp.seq.union$dist[,1], ylim=range(log2(1+lp.seq.union$dist)), type='n')
+names(dn.cols) <- colnames(lp.seq.union$dist)
+for(dn in colnames(lp.seq.union$dist)){
+    lines(1:nrow(lp.seq.union$dist) - 1, log2(1+lp.seq.union$dist[,dn]), type='l', col=dn.cols[dn], lwd=2)
+##    inpt <- readline("next: ")
+}
+legend('topright', legend=names(dn.cols), dn.cols, lty=1, lwd=2, col=dn.cols)
+
+
+par(mfrow=c(4,4))
+for(dn in colnames(lp.seq.union$dist)){
+    ylim <- range( c(lp.seq.union$dist[,dn], lp.rnd.wc$dist[,dn], wind.exp[,dn]))
+    plot(1:nrow(lp.seq.union$dist) - 1, lp.seq.union$dist[,dn] / sum(lp.seq.union$dist[,dn]), type='l', col=1, lwd=2, main=dn, ylim=ylim)
+    lines(1:nrow(lp.rnd.wc$dist) - 1, lp.rnd.wc$dist[,dn] / sum(lp.rnd.wc$dist[,dn]), type='l', col=2, lty=1, lwd=2)
+    lines(1:nrow(wind.exp) - 1, wind.exp[,dn], type='l', col=4, lty=1, lwd=2)
+##    inpt <- readline("next: ")
+}
+
+## lets look at all the scaffolds in lophius piscatorius seperately:
+wind.s <- 200
+sc.wind <- lapply( lp.seq, function(x){
+    cat(".")
+    seq <- as.character(x)
+    cat(":")
+    l <- nchar(seq)
+    mf <- kmer.counts( seq, 1, with.f=TRUE )
+    cat("!")
+    wind.f <-  window.kmer.dist( seq, dinucleotides, wind.s, freq=TRUE )
+    cat(" ")
+    list(l=l, mf=mf, wind=wind.f)
+})
+length(sc.wind) ## 154
+
+plot( 1:length(sc.wind), sapply(sc.wind, function(x){ x$l }) )
+lp.sc.size <- sapply(sc.wind, function(x){ x$l })
+
+min.size <- 1e7
+b1 <- lp.sc.size >= min.size
+chr.col <- hsv( 0:sum(b1) / (1.2 * sum(b1)), 1, 0.8, 0.4 )
+par(mfrow=c(1,1))
+for(dn in dinucleotides){
+    wf <- sapply(sc.wind[b1], function(x){ x$wind$dist[,dn] })
+    col.max <- apply(wf, 2, max)
+    plot(1:nrow(wf) - 1, wf[,1], type='n', main=dn, ylim=range(c(wf, lp.rnd.wc$dist[,dn])), xlim=c(0,75))
+    x0 <- 2:nrow(wf) - 2
+    x1 <- x0 + 1
+    y0 <- wf[ 2:nrow(wf)-1, ]
+    y1 <- wf[ 2:nrow(wf), ]
+    cols <- matrix(chr.col[ col(y0) ], nrow=nrow(y0))
+    segments( x0, y0, x1, y1, col=cols, lwd=3)
+    lines( 1:nrow(lp.rnd.wc$dist)-1, lp.rnd.wc$dist[,dn], lwd=3, lty=3, col=1)
+    legend('topright', legend=paste(names(col.max), sprintf("%.3f", col.max)), lty=1, col=cols[1,], lwd=3 )
+    inpt <- readline("next: ")
+}
+### There are some small differences between the scaffolds:
+### in particular, scaffold 3 looks rather different.
+
+tmp <- sapply(sc.wind[b1], function(x){ as.numeric(x$wind$dist) })
+sc.pca <- prcomp(t(tmp), scale=FALSE, center=FALSE)
+
+plot(sc.pca) ## basically there's only one dimension here
+with(sc.pca, plot(x[,1], x[,2], type='n'))
+with(sc.pca, text(x[,1], x[,2], 1:nrow(x)))
+## 3 looks different in component 2, not 1. But the range of component 2 is actually
+## much greater.
+
+sc.wind.max <- sapply( sc.wind, function(x){
+    apply(x$wind$dist, 2, max)
+})
+
+sc.wind.max.i <- sapply( sc.wind, function(x){
+    apply(x$wind$dist, 2, which.max)
+})
+
+
+par(mfrow=c(1,2))
+par(mar=c(5.1, 12.1, 4.1, 2.1))
+o <- order( colSums(sc.wind.max)[b1], decreasing=TRUE )
+image(x=1:nrow(sc.wind.max), y=1:sum(b1), z=(sc.wind.max[,b1])[,o], col=im.col, axes=FALSE, xlab="", ylab="")
+axis(1, at=1:nrow(sc.wind.max), labels=rownames(sc.wind.max))
+axis(2, at=1:sum(b1), (colnames(sc.wind.max)[b1])[o], las=2)
+##
+## par(mfrow=c(1,1))
+par(mar=c(5.1, 12.1, 4.1, 2.1))
+image(x=1:nrow(sc.wind.max.i), y=1:sum(b1), z=(sqrt(sc.wind.max.i[,b1])[,o]), col=im.col, axes=FALSE, xlab="", ylab="")
+axis(1, at=1:nrow(sc.wind.max), labels=rownames(sc.wind.max))
+axis(2, at=1:sum(b1), (colnames(sc.wind.max)[b1])[o], las=2)
+
+
+## will it play nicely with mclapply ?
+require(parallel)
+
+wind.s <- 200
+system.time(
+sc.wind <- mclapply( lp.seq, function(x){
+    cat(".")
+    seq <- as.character(x)
+    cat(":")
+    l <- nchar(seq)
+    mf <- kmer.counts( seq, 1, with.f=TRUE )
+    cat("!")
+    wind.f <-  window.kmer.dist( seq, dinucleotides, wind.s, freq=TRUE )
+    cat(" ")
+    list(l=l, mf=mf, wind=wind.f)
+}, mc.cores=20)
+)
+## system elapsed 
+## 23.409   4.619   3.048 
+
+length(sc.wind) ## 154
+
+
+GCF.seq <- readDNAStringSet( "~/tine/Teleostei_assemblies/teleostei_prot_seq_ncbi/ncbi_dataset/data/GCF_902827115.1/cds_from_genomic.fna" )
 
 sum(nchar(test.seq)) ## 76062661
 test.cnt1 <- kmer.count( as.character(test.seq), 2 )
