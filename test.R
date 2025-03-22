@@ -377,10 +377,66 @@ data.frame(dn=kmer.seq(2), count=kmer.counts(test.monomer, 2)$counts)
 ## Aah, this misses one CG; presumably the last one. Check:
 data.frame(dn=kmer.seq(2), count=kmer.counts(paste0(test.monomer, "GG"), 2)$counts)
 ## That gives us 2 CG; but only one GG. Hence the last nucleotide is missing
-## from the count.
+## from the count. I need to fix the end condition for the function.
 
+## test.monomer is 10 nucleotides long:
+test.wc <- window.kmer.dist( test.monomer, kmer.seq(2), 6, freq=FALSE, ret.flag=1 )
+## The windows are:
+## CGCCAA    CG, GC, CC, CA, AA
+##  GCCAAT       GC, CC, CA, AA, AT
+##   CCAATG          CC, CA, AA, AT, TG
+##    CAATGC             CA, AA, AT, TG, GC
+##     AATGCG                AA, AT, TG, GC, CG
+## test.wc$dist, is a matrix with one column per k-mer counted.
+## the rows indicate the number of windows with a given count of the k-mer
+## with the first row representing 0 instances and the last one being
+## wsize instances. But note that the actual maximum possible is 1 + wsize - k
+## I expect to have the following window counts:
+##     0  1  2  3  4  5
+## CG: 3  2  0  0  0  0
+## GC: 1  4  0  0  0  0
+## CC: 2  3  0  0  0  0
+## CA: 1  4  0  0  0  0
+## AA: 0  5  0  0  0  0
+## AT: 1  4  0  0  0  0
+## TG: 2  3  0  0  0  0
+##
+## The scores look correct, but, the offset is one after the beginning of the kmer
 
-test.seq.1 <- paste(rep("CGCCAATGCG", 100)
+test.dimer <- paste0(rep(test.monomer, 2), collapse="")
+## The windows will now be:
+## CGCC AATGCG CGCCAATGCG
+##                     
+## The windows are:
+## CGCCAATGCGCGCCAATGCG
+## 
+## CG, GC, CC, CA, AA,
+##     GC, CC, CA, AA, AT
+##         CC, CA, AA, AT, TG
+##             CA, AA, AT, TG, GC
+##                 AA, AT, TG, GC, CG
+##                     AT, TG, GC, CG, GC, ##*##
+##                         TG, GC, CG, GC, CG, ##*##
+##                             GC, CG, GC, CG, GC, ##*##
+##                                 CG, GC, CG, GC, CC, ##*##
+##                                     GC, CG, GC, CC, CA, ##*##
+##                                         CG, GC, CC, CA, AA, 
+##                                             GC, CC, CA, AA, AT, 
+##                                                 CC, CA, AA, AT, TG,
+##                                                     CA, AA, AT, TG, GC,
+##                                                         AA, AT, TG, GC, CG,
+
+## The new windows are indicated Apart from these, the counts
+## will simply double to:
+## I expect to have the following window counts:
+##     0  1  2  3  4  5
+## CG: 6  6  3  0  0  0
+## GC: 2  8  4  1  0  0
+## CC: 7  8  0  0  0  0
+## CA: 6  9  0  0  0  0
+## AA: 5  10 0  0  0  0
+## AT: 6  9  0  0  0  0
+## TG: 7  8  0  0  0  0
 
 
 im.col <- hcl.colors(128, "YlOrRd", rev = TRUE)

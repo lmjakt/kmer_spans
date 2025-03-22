@@ -140,13 +140,15 @@ size_t sequence_kmer_count(const char *seq, int *counts, int k){
   while(seq[i]){
     // pass any potential Ns
     i = init_kmer(seq, i, &offset, k);
+    if(!seq[i])
+      break;
+    counts[ offset & mask ]++;
+    ++word_count;
     while(seq[i] && LC(seq[i]) != 'n'){
-      counts[ offset & mask ]++;
-      ++word_count;
-      // note that UPDATE_OFFSET can handle the NULL terminator
-      // so we do not need to check for it.
       offset = UPDATE_OFFSET(offset, seq[i]);
       ++i;
+      counts[ offset & mask ]++;
+      ++word_count;
     }
   }
   return(word_count);
