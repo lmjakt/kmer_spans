@@ -437,7 +437,7 @@ void windowed_kmer_count_distributions(const char *seq, unsigned long *kmers, in
       for(int i=0; i < kmer_n; ++i){
 	window_kmer_counts[i][ kmer_counts[ kmers[i] ] ]++;
 	if(kmer_counts_pos)
-	  kmer_counts_pos[i][ left ] = kmer_counts[ kmers[i] ];
+	  kmer_counts_pos[i][left - k] = kmer_counts[ kmers[i] ];
       }
       kmer_counts[ left_offset & mask ]--;
       left_offset = UPDATE_OFFSET( left_offset, seq[left] );

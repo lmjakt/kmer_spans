@@ -122,46 +122,230 @@ dn.wind.11 <- window.kmer.dist( as.character(lp.seq[[11]]), dinucleotides, 200, 
 
 rng <- 1:1e7
 with(dn.wind.11, plot(rng, scores[[1]][rng,'CG'], type='l'))
-## something weird after 7e5
-abline(v=6.85e5, col='red')
+## looks OK.
 
-with(dn.wind.11, plot(1:nrow(scores[[1]]), scores[[1]][,'CG'], type='l', xlim=c(6.8e5, 6.9e5)))
-abline(v=c(685700, 685700+500), col='red')
-rng <- c(685700, 685700+1000)
-with(dn.wind.11, plot(1:nrow(scores[[1]]), scores[[1]][,'CG'], type='l', xlim=c(6.8e5, 6.9e5)))
-
-rng <- (1e6+20):(1e6+400)
-with(dn.wind.11, plot(rng, scores[[1]][rng,'CG'], type='l'))
-
-as.character(substring( lp.seq[[11]], rng[1], rng[2]))
-
-with(dn.wind.11, scores[[1]][ 400 + rng[1]:rng[2], 'CG' ])
-
-as.character(substring( lp.seq[[11]], 400 + rng[1], 500 + rng[1] ))
-
+## This will also get the scores for each individual position
 system.time(
     lp.seq.union <- window.kmer.dist( as.character(lp.seq[[1]]), dinucleotides, 200, ret.flag=1 )
 )
 ##  user  system elapsed 
-##  1.673   1.149   2.822 
-dim(lp.seq.union)
+## 1.790   1.744   3.534 
+dim(lp.seq.union$dist)
 ## [1] 201  16
 
 system.time(
     lp.seq.union <- window.kmer.dist( as.character(lp.seq[[1]]), dinucleotides, 200, ret.flag=0 )
 )
 ##  user  system elapsed 
-## 1.193   0.064   1.256 
+## 1.198   0.066   1.265 
 
-## a random sequence. This is unfortunately slow; sampling 48e6 times and pasting.. 
-lp.rnd <- paste0( sample(kmer.seq(1), width(lp.seq)[1], replace=TRUE, prob=lp.mnf$f), collapse="" )
+## a random sequence. This is unfortunately slow; sampling 5 * 48e6 times and pasting.. 
+lp.rnd <- paste0( sample(kmer.seq(1), 5 * width(lp.seq)[1], replace=TRUE, prob=lp.mnf$f), collapse="" )
 lp.rnd.wc <- window.kmer.dist( lp.rnd, dinucleotides, 200 )
+lp.wc <- lp.seq.union
 
-tmp <- kmer.counts( lp.rnd, 1)
-tmp$f
-## [1] 0.3007744 0.1988468 0.3008254 0.1995534
-lp.mnf$f
-## [1] 0.3006933 0.1988830 0.3008665 0.1995572
+lp.rnd.2 <- paste0( sample(kmer.seq(1), width(lp.seq)[1], replace=TRUE, prob=lp.mnf$f), collapse="" )
+lp.rnd.2.wc <- window.kmer.dist( lp.rnd, dinucleotides, 200 )
+
+## do also for monomers:
+lp.rnd.mnw <- window.kmer.dist( lp.rnd, kmer.seq(1), 200 )
+lp.mnw <- window.kmer.dist( as.character(lp.seq[[1]]), kmer.seq(1), 200 )
+
+dim(lp.wc$dist)
+dim(lp.rnd.wc$dist)
+
+lp.rnd.k1 <- kmer.counts( lp.rnd, k=1, with.f=TRUE )
+lp.rnd.k2 <- kmer.counts( lp.rnd, k=2, with.f=TRUE )
+lp.rnd.dn.exp <- with(lp.rnd.k1, f %*% t(f))
+lp.rnd.dn.exp <- as.vector(lp.rnd.dn.exp)
+names(lp.rnd.dn.exp) <- names(dn.exp)
+
+## dinucleotide binomial expected counts for a window:
+## to compensate for the fact that the distribution is not random...
+## ws: window size, dn.p: the expected probability of the dinucleotide in a random
+##     sequence.
+dn.bin <- function(ws, dn.p, homodimer=FALSE){
+    ## for a dinucleotide the effective window size is ws - 1
+    ws <- ws - 1
+    r1 <- ws %/% 2
+    r2 <- r1 + ws %% 2
+    ## this considers the sampling of even and odd dinucleotides separately;
+    r1.b <- dbinom( 0:r1, r1, dn.p )
+    r2.b <- dbinom( 0:r2, r2, dn.p )
+    p.m <- r1.b %*% t(rev(r2.b))
+    ## this means that r2.b --> columns in reverse order
+    n <- (r2 - col(p.m) + 1) + (row(p.m)-1)
+    ## if we have homodimer, then we can have up to r1 + r2 instances.
+    if(homodimer){
+        p <- as.vector(tapply(p.m, n, sum)) / sum(p.m)
+        n <- unique(sort(n))
+        return(cbind(n, p))
+    }
+    ## we are still over counting; because selecting a single dinucleotide
+    ## at position i, will block positions i-1 and i+1, unless it is adjacent
+    ## to a previously selected one.
+    ## we can determine the expected number of sites that are next to each other
+    ## on the basis of the expected distance. But it gets complicated to do it properly.
+    n <- n[ upper.tri(n, diag=FALSE) ]
+    p <- p.m[ upper.tri( p.m, diag=FALSE ) ]
+    p <- as.vector( tapply( p, n, sum ))
+    cbind(unique(sort(n)), p)
+}
+
+## ws: window size
+## mnf: mononucleotide frequencies
+model.window <- function(ws, mnf, nucs){
+    dnf <- mnf %*% t(mnf)
+    dn <- cbind( nucs[row(dnf)], nucs[col(dnf)] )
+    homod <- dn[,1] == dn[,2]
+    m <- matrix(nrow=length(dnf), ncol=ws-1)
+    trans.m <- sapply(1:16, function(i){ dn[i,2] == dn[,1] }) + 0
+    mnf.t <- as.vector( matrix(mnf, nrow=4, ncol=4, byrow=TRUE) )
+    m[,1] <- dnf
+##    trans.m <- sapply(0:15 %% 4, function(i){ m[,1] * (0:15 %/% 4 == i) })
+    for(i in 2:ncol(m)){
+        m[,i] <- (trans.m %*% m[,1]) * mnf.t
+    }
+    m
+}
+
+?dpois
+
+ws <- nrow(lp.wc$dist) - 1
+par(mfrow=c(4,4))
+for(dn in colnames(lp.wc$dist)){
+    homodimer <- length( table( unlist(strsplit(dn, ""))) ) == 1
+##    n <- ifelse(homodimer, ws-1, ceiling((ws-1)/2))
+    n <- ws-1
+    bin.1 <- dbinom( 0:n, n, p=dn.exp[dn] )
+    bin.2 <- dn.bin( ws-1, dn.exp[dn], homodimer )
+    bin.3 <- dbinom( 0:n, n, p=lp.rnd.dn.exp[dn] )
+    pois <- dpois( 0:n, lambda=(n * lp.rnd.dn.exp[dn] ))
+    plot(1:nrow(lp.wc$dist)-1, lp.wc$dist[,dn], main=dn, type='l', ylim=range(c(lp.wc$dist[,dn], lp.rnd.wc$dist[,dn], bin.1)), lwd=2 )
+    lines(1:nrow(lp.rnd.wc$dist)-1, lp.rnd.wc$dist[,dn], col='red', lwd=2)
+    lines(1:nrow(lp.rnd.2.wc$dist)-1, lp.rnd.2.wc$dist[,dn], col='red', lwd=2)
+    lines(0:n, bin.1, col='blue', lwd=2)
+    lines(bin.2[,1], bin.2[,2], col="green", lwd=2)
+##    lines(1:nrow(lp.rnd.wc$dist)-1, bin.3, col="purple", lwd=2)
+    lines(0:n, pois, col="purple", lwd=2)
+}
+
+par(mfrow=c(2,2))
+for(i in 1:ncol(lp.mnw$dist)){
+    n <- nrow(lp.mnw$dist) - 1
+    bin.1 <- dbinom( 0:n, n, p=lp.mnf$f[i] )
+    nuc <- colnames(lp.mnw$dist)[i]
+    with(lp.mnw, plot(0:n, dist[,i], main=nuc, type='l', ylim=range(c(dist[,i], lp.rnd.mnw$dist[,i], bin.1)), lwd=2, col='black'))
+    lines( 0:n, bin.1, col='blue', lwd=2 )
+    with(lp.rnd.mnw, lines(0:n, dist[,i], type='l', col='red', lwd=2))
+}
+### The mononucleotides fit perfectly; And all show a larger spread. A and T have a small peak at 100, suggesting that
+### we do have some TA repeats of 200 bases or more. This is consistent with an equal small peak of 0 C or Gs.
+### But this does tell us that the sequence generation is correct; but that the distribution methods chosen here are
+### not sufficiently good. 
+
+## Lets consider the expected distances between adjacent positions:
+gc.pos <- matchPattern( DNAString("GC"), lp.seq[[1]] )
+gc.rnd.pos <- start(matchPattern( DNAString("GC"), DNAString(lp.rnd) ))
+gc.rnd.pos.e <- gc.rnd.pos[ gc.rnd.pos %% 2 == 0 ]
+gc.rnd.pos.o <- gc.rnd.pos[ gc.rnd.pos %% 2 == 1 ]
+
+plot(0:100, dbinom(0:100, 100, 1 - dn.exp['GC']), type='l')
+plot(0:100, dbinom(0:100, 100, dn.exp['GC']), type='l')
+## all distances will be even
+all.dst <- diff(gc.rnd.pos)
+even.dst <- diff(gc.rnd.pos.e) / 2
+odd.dst <- diff(gc.rnd.pos.o) / 2
+
+all.dst.tb <- as.numeric(table( c(2:max(all.dst), all.dst))) - 1
+even.dst.tb <- as.numeric(table( c(1:max(even.dst), even.dst) )) - 1
+odd.dst.tb <- as.numeric(table( c(1:max(odd.dst), odd.dst))) - 1
+
+even.dst.tb.f <- even.dst.tb / sum(even.dst.tb)
+odd.dst.tb.f <- odd.dst.tb / sum(odd.dst.tb)
+
+even.dst.h <- hist(even.dst, breaks=seq(0.5, max(even.dst)+0.5))
+odd.dst.h <- hist(odd.dst, breaks=seq(0.5, max(odd.dst)+0.5))
+
+## expected distribution is
+plot( 1:100, (1-dn.exp['GC'])^(1:100) / sum( (1-dn.exp['GC'])^(1:100) ), type='l')
+plot( 1:100, even.dst.h$density[1:100], type='l' )
+lines( 1:100, (1-dn.exp['GC'])^(1:100) / (1/log(1-dn.exp['GC'])), type='l', col='purple')
+lines(1:100, even.dst.tb.f[1:100], col='red')
+lines(1:100, odd.dst.tb.f[1:100], col='blue')
+
+## from the internet, the integration of an exponential decay f(x) = exp(-x)
+## between points a and b (where b > a ?) is simply (exp(-a) - exp(-b))
+## in my case f(x) = exp( log(p)x )
+
+x <- 1:100
+p <- 1 - dn.exp['GC']
+lp <- log(p)
+plot( x, even.dst.h$density[x], type='l' )
+lines( x, exp(lp * (x-1)) - exp(lp * x), col='red')
+
+dn.dst <- lapply(names(dn.exp), function(dn){
+    rnd <- start(matchPattern( DNAString(dn), DNAString(lp.rnd) ))
+    lp <- start(matchPattern( DNAString(dn), lp.seq[[1]] ))
+    starts <- list(rnd.even=rnd[ rnd %% 2 == 0 ],
+                   rnd.odd=rnd[ rnd %% 2 == 1 ],
+                   lp.even=lp[ lp %% 2 == 0 ],
+                   lp.odd=lp[ lp %% 2 == 1 ])
+    starts.h <- lapply(starts, function(x){
+        d <- diff(x/2)
+        hist(d, breaks=seq(0.5, max(d)+0.5, 1), plot=FALSE)
+    })
+    list(rnd=rnd, lp=lp, starts=starts, starts.h=starts.h)
+})
+names(dn.dst) <- names(dn.exp)
+
+par(mfrow=c(4,4))
+for(dn in names(dn.exp)){
+    x <- 1:100
+    p <- 1 - dn.exp[dn]
+    lp <- log(p)
+    with(dn.dst[[dn]]$starts.h, {
+        plot( x, rnd.even$density[x], type='l', main=dn, col=1, ylim=range(rnd.even$density, lp.even$density), lwd=2 )
+        lines( x, lp.even$density[x], type='l', col=2, lwd=2 )
+    })
+    lines( x, exp(lp * (x-1)) - exp(lp * x), col=4, lwd=2)
+}
+    
+## use a Markov kind of model to estimate probability of a specific dinucleotide at
+## all positions in a window:
+## p1 and p2; the frequency of nucleotide 1 and 2
+## w; the size of the window
+hetero.dn.markov.p <- function(p1, p2, w){
+    m <- matrix(nrow=w+1, ncol=3)
+    ## The columns are the states of the model;
+    ## S: starting point. The nucleotide is undefined
+    ## n1: At the first nucleotide of the dimer
+    ## n2: At the second nucleotide of the dimer
+    colnames(m) <- c("S", "n1", "n2")
+    m[1,] <- c(1, 0, 0)
+    p1.2 <- p1 + p2
+    for(i in 2:nrow(m)){
+        k <- i-1
+        m[i,'S'] <- m[k,'S'] * (1-p1) + m[k,'n1'] * (1-p1.2) + m[k,'n2'] * (1-p1)
+        m[i,'n1'] <- sum( p1 * m[k,] )
+        m[i,'n2'] <- m[k,'n1'] * p2
+    }
+    m
+}
+
+
+## lets try for AC
+h.dn <- with(lp.mnf, hetero.dn.markov.p(f[1], f[2], 200))
+
+## let's compare...
+with(lp.rnd.wc, plot(1:nrow(dist)-1, dist[,'AC'], type='l', lwd=2))
+bin.1 <- with(lp.rnd.wc, dbinom( 1:nrow(dist)-1, nrow(dist)-3, mean(dn.exp[c('AC', 'CA', 'GT', 'TG')])))
+bin.2 <- with(lp.rnd.wc, dbinom( 1:nrow(dist)-1, nrow(dist)-3, h.dn[201,'n2']))
+bin.3 <- with(lp.rnd.wc, dn.bin( nrow(dist)-3, dn.exp['AC'], homodimer ))
+lines(1:length(bin.1) - 1, bin.1, col='red', lwd=2)
+lines(1:length(bin.2) - 1, bin.2, col='blue', lwd=2)
+lines(bin.3[,'n'], bin.3[,'p'], col='gold', lwd=2)
+## and we still do not get the numbers that make sense.. 
 
 ## this takes a bit of time. 
 lp.all.1 <- kmer.counts( as.character(lp.seq), 1 )
@@ -173,6 +357,31 @@ lp.mnf$f
 
 kmer.counts( lp.rnd, 1 )$counts / lp.mnf$counts
 ## [1] 1.0002718 0.9998203 0.9998656 0.9999826
+
+#### is window.kmer.dist actually giving me correct counts of dinucleotides?
+#### I can't seem to find a distribution that describes the random situation
+#### so first double check that the function does what it should do.
+
+## This unit contains:
+## CG: 2 (one at begin one at at end
+## GC: 2 (internal, not repeating)
+## CC: 1 internal
+## CA: 1 internal
+## AA: 1 internal
+## AT: 1 internal
+## TG: 1 internal
+test.monomer <- "CGCCAATGCG"
+## check:
+data.frame(dn=kmer.seq(2), count=kmer.counts(test.monomer, 2)$counts)
+
+## Aah, this misses one CG; presumably the last one. Check:
+data.frame(dn=kmer.seq(2), count=kmer.counts(paste0(test.monomer, "GG"), 2)$counts)
+## That gives us 2 CG; but only one GG. Hence the last nucleotide is missing
+## from the count.
+
+
+test.seq.1 <- paste(rep("CGCCAATGCG", 100)
+
 
 im.col <- hcl.colors(128, "YlOrRd", rev = TRUE)
 
