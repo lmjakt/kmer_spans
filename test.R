@@ -1318,6 +1318,25 @@ legend("topright", legend=c("TA", "AA", "calculated", "sim short", "sim long"),
        pch=c(NA, NA, NA, 1, 19), lwd=c(1, 1, 1, NA, NA), col=hsv(0, c(1,1,0.5,0.5,0.5), c(0, 1, 0, 0, 0)))
 dev.off()
 
+## lets do this for the full set of dinucleotides and then compare to the real distribution
+## and the observed one.
+expected.dimer.dists <- lapply( strsplit(dinucleotides, ""), function(x){
+    kp3.mod( lp.mnf$f, w=200, k.nucs=x )
+})
+names(expected.dimer.dists) <- dinucleotides
+## that's more or less instantaneous:
+
+par(mfrow=c(4,4))
+i <- 1:50
+x <- i-1
+for(dn in dinucleotides){
+    dists <- cbind(lp.wc$dist[,dn], lp.rnd.ll.wc$dist[,dn], expected.dimer.dists[[dn]]$dist)
+    plot(x, dists[i,1], type='l', ylim=range(dists[i,]), xlab="number of matches", ylab="frequency", main=dn, lwd=2)
+    lines(x, dists[i,2], col='red', lwd=2)
+    lines(x, dists[i,3], col=rgb(0, 0, 1, 1), lty=2)
+}
+
+ls
 ## lets check distributions of random numbers:
 ## this is not so fast, but should be sufficient to give us an idea
 ## actually for this, i should do 100, but lets not care
