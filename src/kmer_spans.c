@@ -410,9 +410,12 @@ void find_kmer_tr_lr_regions(const char *seq, int seq_id,
 // **kmer_counts_pos: an array of integer arrays. If specified, then there
 //                    should be kmer_n arrays, each one the length of the
 //                    sequence; They should be set to 0 by the caller.
+// olap:  if not 0, then count only discrete k-mers (i.e. no overlap);
+// win_olap: if not 0, then count only discrete (non-overlapping windows)
 void windowed_kmer_count_distributions(const char *seq, unsigned long *kmers, int kmer_n,
 				       int **window_kmer_counts, unsigned int *kmer_counts,
-				       unsigned int k, int window, int **kmer_counts_pos){
+				       unsigned int k, int window, int **kmer_counts_pos,
+				       int olap, int win_olap){
   unsigned int k_counts_size = (1 << (2 * k));
   // left and right are the window begin and end positions.
   size_t left = 0;
@@ -428,20 +431,35 @@ void windowed_kmer_count_distributions(const char *seq, unsigned long *kmers, in
       break;
     left = right;
     left_offset = right_offset;
-    kmer_counts[ right_offset & mask ]++;
+    if(olap || right % k == 0){
+      //      Rprintf("A right: %ld offset: %ld\n", right, right_offset & mask);
+      kmer_counts[ right_offset & mask ]++;
+    }
     while(seq[right] && LC(seq[right]) != 'n'){
       right_offset = UPDATE_OFFSET( right_offset, seq[right] );
-      kmer_counts[ right_offset & mask ]++;
       ++right;
-      if(window > (right - (left - k)))
+      if(olap || right % k == 0){
+	//Rprintf("B right: %ld offset: %ld\n", right, right_offset & mask);
+	kmer_counts[ right_offset & mask ]++;
+      }
+      if(window > (1 + right - left))
 	continue;
       // Update the number of counts for window_kmer_counts;
-      for(int i=0; i < kmer_n; ++i){
-	window_kmer_counts[i][ kmer_counts[ kmers[i] ] ]++;
-	if(kmer_counts_pos)
-	  kmer_counts_pos[i][left - k] = kmer_counts[ kmers[i] ];
+      if(olap || right % k == 0){
+	for(int i=0; i < kmer_n; ++i){
+	  window_kmer_counts[i][ kmer_counts[ kmers[i] ] ]++;
+	  int pos = olap ? left-k : (left-k) / k;
+	  if(kmer_counts_pos)
+	    kmer_counts_pos[i][pos] = kmer_counts[ kmers[i] ];
+	}
       }
-      kmer_counts[ left_offset & mask ]--;
+      // if not win_olap, then break from the current loop
+      if(win_olap == 0)
+	break;
+      if(olap || left % k == 0){
+	//	Rprintf("C left: %ld offset: %ld\n", left, left_offset & mask);
+	kmer_counts[ left_offset & mask ]--;
+      }
       left_offset = UPDATE_OFFSET( left_offset, seq[left] );
       ++left;
     }
@@ -712,8 +730,11 @@ SEXP tr_lr_regions_r(SEXP seq_r, SEXP params_r,
   return(ret_value);
 }
 
-// ret_flag; specification of bitwise options. Currently only one option. If bit 1 is set,
+// ret_flag; specification of bitwise options. Currently only one option.
+// If bit 1 is set,
 // return also the scores at all positions analysed.
+// if bit 2 is set, count only discrete k-mers (set olap to 0)
+// if bit 3 (4) is set, count k-mers only for discrete windows.
 SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEXP window_r, SEXP ret_flag_r){
   if( TYPEOF( seq_r ) != STRSXP || length( seq_r ) < 1 )
     error("seq_r should be a character vector with at least one element");
@@ -734,8 +755,8 @@ SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEX
       error("All kmers specified must be of the same length");
   }
   int window = asInteger(window_r);
-  if(window < 2 * k)
-    error("The window size must be at least two times k");
+  if(window < k)
+    error("The window size must be at least k");
   unsigned int ret_flag = (unsigned int)asInteger(ret_flag_r);
   // we can then set up the data that we need.
   int kmer_n = length(kmers_r);
@@ -751,38 +772,50 @@ SEXP windowed_kmer_count_distributions_r(SEXP seq_r, SEXP kmers_r, SEXP k_r, SEX
   // specified.
   // We might consider to return a bit more information; like the total number
   // of sequences considered, and total length. But for now keep it simple;
+  int overlap = ((ret_flag & 2) == 0);
+  int win_overlap = ((ret_flag & 4) == 0);
+  int max_count = overlap ? window : window / k + (window % k > 0);
   SEXP ret_value = PROTECT(allocVector(VECSXP, 3));
-  SET_VECTOR_ELT(ret_value, 0, allocMatrix(INTSXP, window + 1, kmer_n));
+  SET_VECTOR_ELT(ret_value, 0, allocMatrix(INTSXP, max_count + 1, kmer_n));
   int **window_kmer_counts = malloc(sizeof(int*) * kmer_n);
-  memset(INTEGER(VECTOR_ELT(ret_value, 0)), 0, sizeof(int) * (window + 1) * kmer_n);
+  memset(INTEGER(VECTOR_ELT(ret_value, 0)), 0, sizeof(int) * (max_count + 1) * kmer_n);
   for(int i=0; i < kmer_n; ++i)
-    window_kmer_counts[i] = INTEGER(VECTOR_ELT(ret_value, 0)) + i * (window + 1);
+    window_kmer_counts[i] = INTEGER(VECTOR_ELT(ret_value, 0)) + i * (max_count + 1);
 
   SET_VECTOR_ELT( ret_value, 1, allocVector(INTSXP, length(seq_r)));
   int *seq_included = INTEGER(VECTOR_ELT(ret_value, 1));
   int **kmer_counts_pos = 0;
   if(ret_flag & 1){
     kmer_counts_pos = malloc(sizeof(int*) * kmer_n);
+    memset(kmer_counts_pos, 0, sizeof(int*) * kmer_n);
     SET_VECTOR_ELT(ret_value, 2, allocVector(VECSXP, length(seq_r)));
   }
-  
   // And go through the sequences and increment counts.
   for(int i=0; i < length(seq_r); ++i){
     SEXP seq = STRING_ELT(seq_r, i);
+    size_t seq_l = length(seq);
     seq_included[i] = 0;
-    if(length(seq) <= window)
+    if(length(seq) < window)
       continue;
     seq_included[i] = 1;
-    if(kmer_counts_pos){
-      SET_VECTOR_ELT( VECTOR_ELT(ret_value, 2), i, allocMatrix(INTSXP, length(seq), kmer_n) );
+    // the pos_ptr is necessary because the windowed_kmer_count_distributions only
+    // checks if it is null, and not whether the pointers it points to are null.
+    // And to avoid several mallocs and free cycles, I instead have a copy of the
+    // pointer that defaults to NULL
+    int **pos_ptr = 0;
+    // kmer_counts_pos can not handle large matrices of positions and scores:
+    if(kmer_counts_pos && (seq_l * (size_t)kmer_n) < (1 << 30)){
+      int pos_l = overlap ? length(seq) : length(seq) / 2;
+      SET_VECTOR_ELT( VECTOR_ELT(ret_value, 2), i, allocMatrix(INTSXP, pos_l, kmer_n) );
       int *counts_pos = INTEGER(VECTOR_ELT( VECTOR_ELT(ret_value, 2), i ));
-      memset(counts_pos, 0, sizeof(int) * length(seq) * kmer_n );
+      memset(counts_pos, 0, sizeof(int) * pos_l * kmer_n );
       for(int j=0; j < kmer_n; ++j){
-	kmer_counts_pos[j] = counts_pos + length(seq) * j;
+	kmer_counts_pos[j] = counts_pos + pos_l * j;
       }
+      pos_ptr = kmer_counts_pos;
     }
     windowed_kmer_count_distributions(CHAR(seq), kmer_offsets, kmer_n, window_kmer_counts, kmer_counts,
-				      k, window, kmer_counts_pos);
+				      k, window, pos_ptr, overlap, win_overlap);
   }
   free(kmer_counts);
   free(kmer_offsets);
